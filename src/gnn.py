@@ -47,20 +47,24 @@ class RNN_model(torch.nn.Module):
             nn.Dropout(p=0.3)
         )
 
-        self.MLP_state = nn.Linear(in_features=gnn_feat_dim + hidden_size, out_features=8)
-        self.MLP_edge = nn.parameter.Parameter(torch.randn(gnn_feat_dim + hidden_size, embedding_dim))
         # concatenate RNN output and predicted bond presentation
+        self.bond_change = nn.Sequential(
+            nn.Linear(in_features=gnn_feat_dim + hidden_size + embedding_dim, out_features=hidden_size),
+            Mish(),
+            nn.Dropout(0.4),
+            nn.Linear(in_features=hidden_size, out_features=1)
+        )
         self.MLP_edge_type = nn.Sequential(
             nn.Linear(in_features=gnn_feat_dim + hidden_size + embedding_dim, out_features=hidden_size),
             Mish(),
             nn.Linear(in_features=hidden_size, out_features=4)
         )
         self.MLP_atom = nn.parameter.Parameter(torch.randn(gnn_feat_dim + hidden_size, embedding_dim))
-        # self.MLP_motif = nn.Linear(in_features=gnn_feat_dim + hidden_size, out_features=211)
+
         self.MLP_motif = nn.Sequential(
             nn.Linear(in_features=gnn_feat_dim + hidden_size, out_features=hidden_size),
             Mish(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.4),
             nn.Linear(in_features=hidden_size, out_features=211)
         )
         self.MLP_motif_attach_idx = nn.Sequential(
@@ -68,15 +72,8 @@ class RNN_model(torch.nn.Module):
             Mish(),
             nn.Linear(in_features=hidden_size, out_features=4)
         )
-        self.bond_change = nn.Sequential(
-            nn.Linear(in_features=gnn_feat_dim + hidden_size + embedding_dim, out_features=hidden_size),
-            Mish(),
-            nn.Dropout(0.5),
-            nn.Linear(in_features=hidden_size, out_features=1)
-        )
-        self.bce = nn.BCEWithLogitsLoss(reduction="sum")
-        self.mse = nn.MSELoss(reduction='sum')
 
+        self.bce = nn.BCEWithLogitsLoss(reduction="sum")
         self.ce = nn.CrossEntropyLoss(reduction='sum')
 
         self.gnn = GNN_graphpred(gnn_num_layer, emb_dim, atom_feat_dim, bond_feat_dim,
