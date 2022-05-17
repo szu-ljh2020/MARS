@@ -1,4 +1,4 @@
-# Reference implementation of our paper A Motif-based Autoregressive Model for Retrosynthesis Prediction
+# Reference implementation of our paper: A Motif-based Autoregressive Model for Retrosynthesis Prediction
 
 # conda environment
 We recommend to new a Conda environment to run the code.
