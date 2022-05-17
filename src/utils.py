@@ -5,7 +5,7 @@ from rdkit import Chem
 from prepare_mol_graph import get_atom_feature, get_bond_features
 
 
-def get_submol_by_edits(p_smi, transform):
+def get_submol_by_edits(p_smi, transform, type=None):
     # edit is break bonds
     p_mol = Chem.MolFromSmiles(p_smi, sanitize=False)
     mol = Chem.RWMol(p_mol)
@@ -51,7 +51,7 @@ def get_submol_by_edits(p_smi, transform):
         edge_index_synthon = torch.empty((2, 0), dtype=torch.long)
         edge_attr_synthon = torch.empty((0, num_bond_features), dtype=torch.bool)
     # return x_synthon, edge_index_synthon, edge_attr_synthon
-    synthon_data = Data(x=x_synthon, edge_index=edge_index_synthon, edge_attr=edge_attr_synthon)
+    synthon_data = Data(x=x_synthon, edge_index=edge_index_synthon, edge_attr=edge_attr_synthon, type=type)
     return synthon_data
 
 

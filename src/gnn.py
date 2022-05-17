@@ -51,7 +51,7 @@ class RNN_model(torch.nn.Module):
         self.bond_change = nn.Sequential(
             nn.Linear(in_features=gnn_feat_dim + hidden_size + embedding_dim, out_features=hidden_size),
             Mish(),
-            nn.Dropout(0.4),
+            nn.Dropout(0.3),
             nn.Linear(in_features=hidden_size, out_features=1)
         )
         self.MLP_edge_type = nn.Sequential(
@@ -317,7 +317,7 @@ class RNN_model(torch.nn.Module):
                 beam_size, node_representation, self_edge_representation, edge_representation, batch.rnn_input,
                 batch.rnn_target, batch.atom_len, batch.edge_len, batch.bondidx2atomidx,
                 batch.synthon_attachment_indexes, batch.atom_symbols, batch.patomidx2mapnum, motif_vocab,
-                motif_masks, batch.product, device, typed)
+                motif_masks, batch.product, device, type=batch.type, typed=typed)
             if output != None:
                 logprob, edge_transformations, atom_transformations, transformation_paths, targets = output
 
@@ -343,7 +343,7 @@ class RNN_model(torch.nn.Module):
         return loss, pred_res
 
     def beam_deocde(self, beam_size, nodes, self_edges, edges, inputs, targets, atom_len, bond_len, bondidx2atomidx,
-                    attachments_list, atom_symbols, atomidx2mapnums, motif_vocab, motif_masks, products, device,
+                    attachments_list, atom_symbols, atomidx2mapnums, motif_vocab, motif_masks, products, device, type,
                     typed=False):
 
         # beam search currently only works for batch size 1
@@ -354,7 +354,7 @@ class RNN_model(torch.nn.Module):
         mols_embedding = torch.cat(mols_list, dim=0)
         hidden = self.embedding_mol(mols_embedding).view(self.n_layers, -1, self.hidden_size)
 
-        beam_nodes = [BeamSearchNode(hidden[:, 0], 0.0, [[0, ]], products)]
+        beam_nodes = [BeamSearchNode(hidden[:, 0], 0.0, [[0, ]], products, type)]
         # transform path length
         for i in range(12):  # 最多做12步transform
             if not beam_nodes:
@@ -366,7 +366,7 @@ class RNN_model(torch.nn.Module):
             hidden = [node.h for node in beam_nodes]
             hidden = torch.stack(hidden, dim=1)
             inputs_embedding = self.embedding(nodes_list * batch_size, edges_list * batch_size, inputs_cur, synthons,
-                                              typed)
+                                              typed=typed)
             output, hidden = self.rnn(inputs_embedding, hidden)
             # concatenate mol embedding with the rnn output vector
             output = torch.cat((mols_embedding.repeat(batch_size, 1), output.squeeze(1)), dim=1)
@@ -406,7 +406,7 @@ class RNN_model(torch.nn.Module):
                                 node.edge_transformation.append((bond_idx, edge_type))
                                 edge = bondidx2atomidx[0][bond_idx]
                                 node.attachments_list.extend(edge)
-                                node.synthon = get_submol_by_edits(node.p_smi[0], [bond_idx, edge_type])
+                                node.synthon = get_submol_by_edits(node.p_smi[0], [bond_idx, edge_type], type=node.synthon.type)
                                 candidates.add((node.logp, node))
                         else:
                             atom_idx = (bond_idx - bond_len[0]).item()

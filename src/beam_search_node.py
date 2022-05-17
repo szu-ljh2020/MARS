@@ -5,7 +5,7 @@ from torch_geometric.data import Data
 
 
 class BeamSearchNode(object):
-    def __init__(self, hiddenstate=None, logProb=0., input_next=[0, ], p_smi=''):
+    def __init__(self, hiddenstate=None, logProb=0., input_next=[0, ], p_smi='', type=None):
         self.h = hiddenstate
         self.logp = logProb
         self.log_probs = []
@@ -20,7 +20,8 @@ class BeamSearchNode(object):
         self.p_smi = p_smi
         self.synthon = Data(x=torch.tensor(np.zeros(shape=(1, 45)), dtype=torch.float32),
                             edge_index=torch.empty((2, 0), dtype=torch.long),
-                            edge_attr=torch.empty((0, 12), dtype=torch.bool))
+                            edge_attr=torch.empty((0, 12), dtype=torch.bool),
+                            type=type)
 
     def eval(self, alpha=1.0):
         reward = 0
