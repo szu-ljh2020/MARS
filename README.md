@@ -1,5 +1,7 @@
 # Reference implementation of our paper: A Motif-based Autoregressive Model for Retrosynthesis Prediction
 
+# The code in this repository will be updated in a few days.
+
 # conda environment
 We recommend to new a Conda environment to run the code. We use Python-3.7, PyTorch-1.6.0, PyTorch-Geometric-2.0.2 and rdkit-202003.3.0.
 
