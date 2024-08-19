@@ -2,7 +2,63 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 from rdkit import Chem
-from prepare_mol_graph import get_atom_feature, get_bond_features
+
+
+def get_onehot(item, item_list):
+    return list(map(lambda s: item == s, item_list))
+
+
+def get_symbol_onehot(symbol):
+    symbol_list = ['O', 'N', 'Si', 'I', 'C', 'Br', 'Sn', 'Mg', 'Cu', 'S', 'P', 'Se', 'F', 'B', 'Cl', 'Zn', 'unk']
+    if symbol not in symbol_list:
+        symbol = 'unk'
+    return list(map(lambda s: symbol == s, symbol_list))
+
+
+def get_atom_feature(atom):
+    '''
+    生成原子的特征：degree、H原子个数、电荷数、手性、杂化轨道、是否是芳香物中原子、mass、化学符号等特征拼接到一起
+    '''
+    degree_onehot = get_onehot(atom.GetDegree(), [0, 1, 2, 3, 4, 5, 6])
+    H_num_onehot = get_onehot(atom.GetTotalNumHs(), [0, 1, 2, 3, 4])
+    formal_charge = get_onehot(atom.GetFormalCharge(), [-1, -2, 1, 2, 0])
+    chiral_tag = get_onehot(int(atom.GetChiralTag()), [0, 1, 2, 3])
+    hybridization = get_onehot(
+        atom.GetHybridization(),
+        [
+            Chem.rdchem.HybridizationType.SP,
+            Chem.rdchem.HybridizationType.SP2,
+            Chem.rdchem.HybridizationType.SP3,
+            Chem.rdchem.HybridizationType.SP3D,
+            Chem.rdchem.HybridizationType.SP3D2
+        ]
+    )
+    symbol_onehot = get_symbol_onehot(atom.GetSymbol())
+    # Atom mass scaled to about the same range as other features
+    atom_feature = degree_onehot + H_num_onehot + formal_charge + chiral_tag + hybridization + [
+        atom.GetIsAromatic()] + [atom.GetMass() * 0.01] + symbol_onehot
+
+    return atom_feature
+
+
+def get_bond_features(bond):
+    """
+    Builds a feature vector for a bond.
+    :param bond: A RDKit bond.
+    :return: A list containing the bond features.
+    键的特征：键的类型、是否共轭、是否是环中的键、立体
+    """
+    bt = bond.GetBondType()
+    fbond = [
+        bt == Chem.rdchem.BondType.SINGLE,
+        bt == Chem.rdchem.BondType.DOUBLE,
+        bt == Chem.rdchem.BondType.TRIPLE,
+        bt == Chem.rdchem.BondType.AROMATIC,
+        (bond.GetIsConjugated() if bt is not None else 0),
+        (bond.IsInRing() if bt is not None else 0)
+    ]
+    fbond += get_onehot(int(bond.GetStereo()), list(range(6)))
+    return fbond
 
 
 def get_submol_by_edits(p_smi, transform, type=None):
@@ -168,5 +224,3 @@ def string2list(input_string):
             return output
     else:
         raise ValueError("Expect 'str', but got '" + type(input_string).__name__ + "'")
-
-
