@@ -1,5 +1,3 @@
-# this file is adapted from https://github.com/snap-stanford/pretrain-gnns/blob/master/chem/finetune.py
-
 import argparse
 import json
 import numpy as np
@@ -7,22 +5,23 @@ import math
 import os
 import shutil
 import torch
-torch.cuda.current_device()
 import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch_geometric
 import time
+import random
 
 from collections import Counter
 from tqdm import tqdm
-from torch_geometric.data import DataLoader
-from tensorboardX import SummaryWriter
+from torch_geometric.loader import DataLoader
+import torch_geometric.transforms as T
 
-from gnn import GNN, GNN_graphpred, RNN_model
+from model import GNN, GNN_graphpred, RNN_model
 from prepare_mol_graph import MoleculeDataset
 
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from cyclic_lr import *
 
 
@@ -69,7 +68,7 @@ def eval_decoding(args, model, device, dataset, motif_vocab, motif_masks, k):
         with torch.no_grad():
             batch = batch[0].to(device)
             output = model(
-                batch, args.typed, motif_vocab, motif_masks, args.beam_size, device=device)
+                batch, args.typed, motif_vocab, motif_masks, args.beam_size, k=k, device=device)
             if output is not None:
                 rank, logprob, edge_trans, atom_trans, trans_paths, targets = output
             else:
@@ -181,11 +180,9 @@ def train_multiprocess(rank, args, model, device, train_dataset, valid_dataset, 
     logfile = open(logfile, 'w', buffering=1)
     logfile.write('epoch,train_loss,train_phase1_acc,train_phase2_acc,valid_loss,valid_phase1_acc,valid_phase2_acc,'
                   'test_loss,test_phase1_acc,test_phase2_acc\n')
-    # optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.decay)
     epochs = args.epochs // args.num_processes
     output_model_file = os.path.join(args.filename, 'model_{}.pt'.format(rank))
     print('output_model_file:', output_model_file)
-    # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
 
     cycle_inter = args.cyc_inner
     cycle_inter = cycle_inter // args.num_processes
@@ -197,6 +194,7 @@ def train_multiprocess(rank, args, model, device, train_dataset, valid_dataset, 
                                                out_dir=output_model_file,
                                                take_snapshot=False,
                                                eta_min=1e-5)
+    # scheduler = cosineAnnealingLR(optimizer, T_max=1, eta_min=1e-5)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
@@ -205,13 +203,10 @@ def train_multiprocess(rank, args, model, device, train_dataset, valid_dataset, 
     max_test_phase2_acc = 0.0
     for epoch in range(1, epochs + 1):
         print("====rank and epoch: ", rank, epoch)
-        # val_res = train(args, model, device, val_loader, motif_vocab, motif_masks, optimizer, train=False)
 
         train_res = train(args, model, device, train_loader, motif_vocab, motif_masks, optimizer, epoch=epoch)
         loss, mol_acc, phase1_acc, phase2_acc = train_res
-        # print(
-        #     "rank: %d epoch: %d train_loss: %f mol_acc: %f transform_acc: %f phase1_acc: %f phase2_acc: %f phase1_transform_acc: %f phase2_transform_acc: %f" % (
-        #     rank, epoch, *train_res))
+
         print("rank: %d epoch: %d train_loss: %f mol_acc: %f phase1_acc: %f phase2_acc: %f " % (
             rank, epoch, loss, mol_acc, phase1_acc, phase2_acc))
 
@@ -235,15 +230,11 @@ def train_multiprocess(rank, args, model, device, train_dataset, valid_dataset, 
             max_test_phase2_acc = test_res[3]
             output_model_file = os.path.join(args.filename, 'model_{}_max.pt'.format(rank))
             torch.save(model.state_dict(), output_model_file)
-        # print(
-        #     "rank: %d epoch: %d val_loss: %f mol_acc: %f transform_acc: %f phase1_acc: %f phase2_acc: %f phase1_transform_acc: %f phase2_transform_acc: %f" % (
-        #     rank, epoch, *val_res))
+
         loss, mol_acc, phase1_acc, phase2_acc = val_res
         print("rank: %d epoch: %d val_loss: %f mol_acc: %f phase1_acc: %f phase2_acc: %f " % (
             rank, epoch, loss, mol_acc, phase1_acc, phase2_acc))
-        # print(
-        #     "rank: %d epoch: %d test_loss: %f mol_acc: %f transform_acc: %f phase1_acc: %f phase2_acc: %f phase1_transform_acc: %f phase2_transform_acc: %f" % (
-        #     rank, epoch, *test_res))
+
         loss, mol_acc, phase1_acc, phase2_acc = test_res
         print("rank: %d epoch: %d test_loss: %f mol_acc: %f phase1_acc: %f phase2_acc: %f " % (
             rank, epoch, loss, mol_acc, phase1_acc, phase2_acc))
@@ -264,7 +255,7 @@ def main():
                         help='which gpu to use if any (default: 0)')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='input batch size for training (default: 32)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=122,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=0.0003,
                         help='learning rate (default: 0.0003)')
@@ -272,12 +263,12 @@ def main():
                         help='relative learning rate for the feature extraction layer (default: 1)')
     parser.add_argument('--decay', type=float, default=0,
                         help='weight decay (default: 0)')
-    parser.add_argument('--num_layer', type=int, default=4,
-                        help='number of GNN message passing layers (default: 4).')
+    parser.add_argument('--num_layer', type=int, default=3,
+                        help='number of RNN message passing layers (default: 3).')
     parser.add_argument('--gnn_num_layer', type=int, default=6,
                         help='number of GNN message passing layers (default: 6).')
     parser.add_argument('--emb_dim', type=int, default=512,
-                        help='embedding dimensions (default: 300)')
+                        help='embedding dimensions (default: 512)')
     parser.add_argument('--dropout_ratio', type=float, default=0.5,
                         help='dropout ratio (default: 0.5)')
     parser.add_argument('--graph_pooling', type=str, default="attention",
@@ -285,7 +276,7 @@ def main():
     parser.add_argument('--JK', type=str, default="concat",
                         help='how the node features across layers are combined. last, sum, max or concat')
     parser.add_argument('--gnn_type', type=str, default="transformer")
-    parser.add_argument('--dataset', type=str, default='data3/USPTO50K',
+    parser.add_argument('--dataset', type=str, default='data/USPTO50K',
                         help='root directory of dataset.')
     parser.add_argument('--atom_feat_dim', type=int, default=45, help="atom feature dimension.")
     parser.add_argument('--bond_feat_dim', type=int, default=12, help="bond feature dimension.")
@@ -298,26 +289,31 @@ def main():
     parser.add_argument('--num_processes', type=int, default=4, help='number of processes for multi-process training')
     parser.add_argument('--input_model_file', type=str, default='',
                         help='filename to read the model (if there is any)')
-    parser.add_argument('--filename', type=str, default='addsynall_gtn_d512_bz128_cyc200_e400_20211229', help='output filename')
+    parser.add_argument('--filename', type=str, default='gtn_d512_bz32_cyc20_e100_20231213', help='output filename')
     parser.add_argument('--seed', type=int, default=42, help="Seed for splitting the dataset.")
     parser.add_argument('--runseed', type=int, default=0, help="Seed for minibatch selection, random initialization.")
     parser.add_argument('--eval_train', action='store_true', default=False, help='evaluating training or not')
-    parser.add_argument('--num_workers', type=int, default=0, help='number of workers for dataset loading')
+    parser.add_argument('--num_workers', type=int, default=2, help='number of workers for dataset loading')
     parser.add_argument('--beam_size', type=int, default=10, help='beam search size for rnn decoding')
-    parser.add_argument('--cyc_inner', type=int, default=10, help='cyclic train epoches inner')
+    parser.add_argument('--cyc_inner', type=int, default=20, help='cyclic train epoches inner')
     parser.add_argument('--pe', action='store_true', default=False, help='use positional encoding')
     parser.add_argument('--pe_dim', type=int, default=8, help='input of positional encoding')
 
     args = parser.parse_args()
 
+    os.environ['PYTHONHASHSEED'] = str(args.runseed)
+    random.seed(args.runseed)
     torch.manual_seed(args.runseed)
     np.random.seed(args.runseed)
     device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.runseed)
-    # device = torch.device("cpu")
+        torch.cuda.manual_seed(args.runseed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     # set up dataset
+    # transforms = T.Compose([T.ToSparseTensor(), T.AddSelfLoops()])
     train_dataset = MoleculeDataset(args.dataset, split='train')
     valid_dataset = MoleculeDataset(args.dataset, split='valid')
     test_dataset = MoleculeDataset(args.dataset, split='test')
@@ -350,29 +346,6 @@ def main():
         model.from_pretrained(input_model_file, args.device)
         print("load model from:", input_model_file)
 
-    # if args.input_model_file:
-    #     import collections
-    #     nets = []
-    #     for i in range(-5, 5):
-    #         num = args.input_model_file
-    #         input_model_file = os.path.join(args.filename, "model_e{}.pt".format(int(num[7:][:-3]) + i))
-    #         net = RNN_model(args.num_layer, args.gnn_num_layer, args.emb_dim, args.atom_feat_dim, args.bond_feat_dim,
-    #                         JK=args.JK, drop_ratio=args.dropout_ratio,
-    #                         graph_pooling=args.graph_pooling, gnn_type=args.gnn_type,
-    #                         pe=args.pe, pe_dim=args.pe_dim)
-    #         net.from_pretrained(input_model_file)
-    #         nets.append(net)
-    #     worker_state_dict = [x.state_dict() for x in nets]
-    #     weight_keys = list(worker_state_dict[0].keys())
-    #     print(worker_state_dict[0].keys())
-    #     fed_state_dict = collections.OrderedDict()
-    #     for key in weight_keys:
-    #         key_sum = 0
-    #         for i in range(len(nets)):
-    #             key_sum = key_sum + worker_state_dict[i][key]
-    #         fed_state_dict[key] = torch.true_divide(key_sum, len(nets))
-    #     model.load_state_dict(fed_state_dict)
-
     motif_vocab = train_dataset.motif_vocab
     motif_masks = train_dataset.motif_masks
     if args.test_only:
@@ -380,23 +353,18 @@ def main():
         if args.test_set == 'test':
             print("evaluate on test data only")
             acc = eval_multi_process(args, model, device, test_dataset, motif_vocab, motif_masks)
-            # acc = eval(args, model, device, test_dataset, motif_vocab, motif_masks)
         elif args.test_set == 'valid':
             print("evaluate on valid data only")
             acc = eval_multi_process(args, model, device, valid_dataset, motif_vocab, motif_masks)
         elif args.test_set == 'train':
             print("evaluate on train data only")
             acc = eval_multi_process(args, model, device, train_dataset, motif_vocab, motif_masks)
-        # acc = eval(args, model, device, test_dataset, motif_vocab, motif_masks)
         t2 = time.time()
         print("prediction acc:", acc)
         print(t2 - t1)
         exit(1)
 
     if args.multiprocess:
-        # if 0:
-        # ctx = mp.get_context("spawn")
-        # ctx.set_start_method("spawn")
         mp.set_start_method('spawn', force=True)
         model.share_memory()  # gradients are allocated lazily, so they are not shared here
         processes = []
@@ -418,9 +386,6 @@ def main():
                       'test_loss,test_phase1_acc,test_phase2_acc\n')
         output_model_file = os.path.join(args.filename, 'model_e{}.pt')
         print('output_model_file:', output_model_file)
-        # set up optimizer
-        # optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.decay)
-        # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
 
         cycle_inter = args.cyc_inner
         optimizer = optim.Adam([{'params': model.parameters()}], lr=args.lr, weight_decay=args.decay)
@@ -431,15 +396,14 @@ def main():
                                                    out_dir=output_model_file,
                                                    take_snapshot=False,
                                                    eta_min=1e-5)
-
         print(optimizer)
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-        val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-        test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+        val_loader = DataLoader(valid_dataset, batch_size=args.batch_size * 4, shuffle=False, num_workers=args.num_workers)
+        test_loader = DataLoader(test_dataset, batch_size=args.batch_size * 4, shuffle=False, num_workers=args.num_workers)
 
+        t1 = time.time()
         for epoch in range(1, args.epochs + 1):
             print("====epoch " + str(epoch))
-            # lr = optimizer.param_groups[0]['lr']
             train_loss, train_mol_acc, train_phase1_acc, train_phase2_acc = train(args, model, device, train_loader, motif_vocab, motif_masks,
                                                           optimizer, train=True, epoch=epoch)
             scheduler.step()
@@ -461,6 +425,8 @@ def main():
                           + str(val_res[0]) + ',' + str(val_res[2]) + ',' + str(val_res[3]) + ','
                           + str(test_res[0]) + ',' + str(test_res[2]) + ',' + str(test_res[3]) + '\n')
             logfile.flush()
+        t2 = time.time()
+        print(t2 - t1)
 
 
 if __name__ == "__main__":
